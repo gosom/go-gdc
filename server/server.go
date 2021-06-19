@@ -32,12 +32,15 @@ func NewServer(bind string, workers int) *Server {
 	mux.HandleFunc("/registration-number-search",
 		searchByRegistrationNumber(ans.jobs, ans.registry, ans.lock),
 	)
+	mux.HandleFunc("/postcode-search",
+		searchByPostcode(ans.jobs, ans.registry, ans.lock),
+	)
 
 	ans.s = &http.Server{
 		Addr:           bind,
 		Handler:        mux,
-		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
+		ReadTimeout:    30 * time.Second,
+		WriteTimeout:   30 * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
 	var netClient = &http.Client{
@@ -97,6 +100,88 @@ func searchByRegistrationNumber(q chan entities.Job, registry map[string]chan en
 		lock.Unlock()
 		q <- job
 		result := <-ch
+		renderJson(w, http.StatusOK, result)
+	}
+}
+
+type PostCodeResponse struct {
+	Postcode    string
+	Count       int
+	Individuals []entities.Individual
+	Errors      []string
+}
+
+func searchByPostcode(q chan entities.Job, registry map[string]chan entities.Output,
+	lock *sync.Mutex) http.HandlerFunc {
+	p := parser.NewListinResultParser()
+	single := parser.NewSingleResultParser()
+	return func(w http.ResponseWriter, r *http.Request) {
+		keys, ok := r.URL.Query()["postcode"]
+		if !ok || len(keys[0]) < 1 {
+			msg := map[string]string{
+				"error": "Url Param 'postcode' is missing'",
+			}
+			renderJson(w, http.StatusBadRequest, msg)
+			return
+		}
+		job := entities.NewDiscoverJob(p, keys[0], "POST", "")
+		ch := make(chan entities.Output, 1)
+		defer func() {
+			close(ch)
+			lock.Lock()
+			delete(registry, job.GetID())
+			lock.Unlock()
+		}()
+
+		lock.Lock()
+		registry[job.GetID()] = ch
+		lock.Unlock()
+		q <- job
+		items := <-ch
+
+		var regNumbers []string
+		for i := range items.Individuals {
+			regNumbers = append(regNumbers, items.Individuals[i].RegistrationNumber)
+		}
+		result := PostCodeResponse{
+			Postcode: keys[0],
+		}
+
+		if len(regNumbers) > 0 {
+			other := make(chan entities.Output, len(regNumbers))
+			wg := &sync.WaitGroup{}
+			for i := range regNumbers {
+				wg.Add(1)
+				go func(num string) {
+					innerJob := entities.NewSearchRegistrationNumberJob(single, num)
+					innerCh := make(chan entities.Output, 1)
+					defer func() {
+						close(innerCh)
+						lock.Lock()
+						delete(registry, innerJob.GetID())
+						lock.Unlock()
+						wg.Done()
+					}()
+					lock.Lock()
+					registry[innerJob.GetID()] = innerCh
+					lock.Unlock()
+					q <- innerJob
+					innerResult := <-innerCh
+					other <- innerResult
+				}(regNumbers[i])
+			}
+			wg.Wait()
+			close(other)
+			for el := range other {
+				if el.Error != nil {
+					result.Errors = append(result.Errors, el.Error.Error())
+				} else {
+					result.Individuals = append(result.Individuals, el.Individuals...)
+				}
+			}
+			result.Count = len(result.Individuals)
+		}
+
 		renderJson(w, http.StatusOK, result)
 	}
 }

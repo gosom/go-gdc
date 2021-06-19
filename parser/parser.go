@@ -3,7 +3,6 @@ package parser
 import (
 	"bytes"
 	"context"
-	"log"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -19,50 +18,55 @@ func NewSingleResultParser() *SingleResultParser {
 	return &ans
 }
 
-func (o *SingleResultParser) Parse(ctx context.Context, body []byte) (entities.Individual, error) {
-	ans := entities.Individual{}
+func (o *SingleResultParser) Parse(ctx context.Context, body []byte) ([]entities.Individual, string, error) {
+	var ans []entities.Individual
+	item := entities.Individual{}
 	dom, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
 	if err != nil {
-		log.Println(err.Error())
-		return ans, err
+		return ans, "", err
 	}
 
 	details := dom.Find("#registrant-details>div.card")
-	ans.Name = strings.TrimSpace(details.Find("div.card-header>h2").Text())
+	item.Name = strings.TrimSpace(details.Find("div.card-header>h2").Text())
 	cardBody := details.Find("div.card-body")
 	cardBody.Find("div.row").Each(func(i int, s *goquery.Selection) {
-		if i > 0 && i < 7 {
+		if i > 0 && i < 11 {
 			cols := s.Find("div")
 			if cols.Length() == 3 {
 				key := strings.TrimSpace(cols.Eq(0).Text())
 				value := strings.TrimSpace(cols.Eq(1).Text())
 				switch key {
+				case "Dental Care Professional Titles:":
+					item.ProfessionalTitles = value
 				case "Registration Number:":
-					ans.RegistrationNumber = value
+					item.RegistrationNumber = value
 				case "Status:":
-					ans.Status = value
+					item.Status = value
 				case "Registrant Type:":
-					ans.RegistrantType = value
+					item.RegistrantType = value
 				case "First Registered on:":
-					ans.FirstRegisteredOn = value
+					item.FirstRegisteredOn = value
 				case "Current period of registration from:":
 					sep := "until:"
 					parts := strings.Split(value, sep)
 					if len(parts) == 2 {
-						ans.CurrentPeriodFrom = strings.TrimSpace(parts[0])
-						ans.CurrentPeriodUntil = strings.TrimSpace(parts[1])
+						item.CurrentPeriodFrom = strings.TrimSpace(parts[0])
+						item.CurrentPeriodUntil = strings.TrimSpace(parts[1])
 					} else {
-						ans.CurrentPeriodFrom = value
+						item.CurrentPeriodFrom = value
 					}
 				case "Qualifications:":
 					lines := strings.Split(value, "\n")
 					for i := range lines {
-						ans.Qualifications = append(ans.Qualifications, strings.TrimSpace(lines[i]))
+						item.Qualifications = append(item.Qualifications, strings.TrimSpace(lines[i]))
 					}
 				}
 			}
 		}
 	})
+	if len(item.RegistrationNumber) > 0 {
+		ans = append(ans, item)
+	}
 
-	return ans, nil
+	return ans, "", nil
 }
