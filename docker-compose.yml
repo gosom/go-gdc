@@ -1,0 +1,27 @@
+version: '3.7'
+
+services:
+  db:
+    image: postgres:13-alpine
+    environment:
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB
+    ports:
+      - "127.0.1:5432:5432"
+    volumes:
+      - postgres_data_gdc:/var/lib/postgresql/data
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "9001:8000"
+    environment:
+      - DSN
+    depends_on:
+      - "db"
+
+
+volumes:
+  postgres_data_gdc:
