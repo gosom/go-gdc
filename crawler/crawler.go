@@ -1,10 +1,13 @@
 package crawler
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"math/rand"
+	"mime/multipart"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/gosom/go-gdc/entities"
@@ -45,7 +48,27 @@ func (o *Crawler) Start(ctx context.Context, in <-chan entities.Job, out chan<- 
 			if !ok {
 				return
 			}
-			out <- o.scrape(ctx, j)
+			output := o.scrape(ctx, j)
+			for len(output.Next) > 0 {
+				// TODO awfull but does the trick
+				u, err := url.Parse(output.Next)
+				if err != nil {
+					break
+				}
+				query := u.Query()
+				postcode := query.Get("Postcode")
+				page := query.Get("page")
+				output.Next = ""
+				if postcode != "" && page != "" {
+					nextjob := entities.NewDiscoverJob(j.GetParser(), postcode, "GET", page)
+					newoutput := o.scrape(ctx, nextjob)
+					output.Next = newoutput.Next
+					for i := range newoutput.Individuals {
+						output.Individuals = append(output.Individuals, newoutput.Individuals[i])
+					}
+				}
+			}
+			out <- output
 		}
 	}
 }
@@ -54,7 +77,7 @@ func (o *Crawler) scrape(ctx context.Context, job entities.Job) entities.Output 
 	ans := entities.Output{
 		Job: job,
 	}
-	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	req, err := o.prepareReq(reqCtx, job)
 	if err != nil {
@@ -77,13 +100,28 @@ func (o *Crawler) scrape(ctx context.Context, job entities.Job) entities.Output 
 			return ans
 		}
 		parser := job.GetParser()
-		ans.Individual, ans.Error = parser.Parse(ctx, ans.Body)
+		ans.Individuals, ans.Next, ans.Error = parser.Parse(ctx, ans.Body)
 	}
 	return ans
 }
 
 func (o *Crawler) prepareReq(ctx context.Context, job entities.Job) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, job.GetUrl(), nil)
+	var req *http.Request
+	var err error
+	if job.GetMethod() == http.MethodPost {
+		payload := &bytes.Buffer{}
+		writer := multipart.NewWriter(payload)
+		for k, v := range job.GetFormData() {
+			_ = writer.WriteField(k, v[0])
+		}
+		if err := writer.Close(); err != nil {
+			return nil, err
+		}
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, job.GetUrl(), payload)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+	} else {
+		req, err = http.NewRequestWithContext(ctx, job.GetMethod(), job.GetUrl(), nil)
+	}
 	if err != nil {
 		return req, err
 	}
