@@ -7,11 +7,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+
 	"github.com/gosom/go-gdc/crawler"
 	"github.com/gosom/go-gdc/entities"
 	"github.com/gosom/go-gdc/manager"
-	"github.com/gosom/go-gdc/parser"
 )
+
+type IndividualRepo interface {
+	GetByRegNum(ctx context.Context, regNum string) (entities.Individual, error)
+	Select(ctx context.Context, conditions map[string]interface{}) ([]entities.Individual, error)
+	Search(ctx context.Context, term string) ([]entities.Individual, error)
+}
 
 type Server struct {
 	s        *http.Server
@@ -19,22 +27,17 @@ type Server struct {
 	jobs     chan entities.Job
 	registry map[string]chan entities.Output
 	lock     *sync.Mutex
+	repo     IndividualRepo
 }
 
-func NewServer(bind string, workers int) *Server {
+func NewServer(bind string, workers int, repo IndividualRepo) *Server {
 	ans := Server{
 		jobs:     make(chan entities.Job),
 		lock:     &sync.Mutex{},
 		registry: make(map[string]chan entities.Output),
+		repo:     repo,
 	}
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("/registration-number-search",
-		searchByRegistrationNumber(ans.jobs, ans.registry, ans.lock),
-	)
-	mux.HandleFunc("/postcode-search",
-		searchByPostcode(ans.jobs, ans.registry, ans.lock),
-	)
+	mux := ans.getRouter()
 
 	ans.s = &http.Server{
 		Addr:           bind,
@@ -55,6 +58,29 @@ func NewServer(bind string, workers int) *Server {
 	return &ans
 }
 
+func (o *Server) getRouter() http.Handler {
+	mux := chi.NewRouter()
+	mux.Use(middleware.RequestID)
+	mux.Use(middleware.RealIP)
+	mux.Use(middleware.Logger)
+	mux.Use(middleware.Recoverer)
+	mux.Use(middleware.Timeout(120 * time.Second))
+
+	mux.Get("/scrape/registration-number/{regNum}",
+		searchByRegistrationNumber(o.jobs, o.registry, o.lock),
+	)
+	mux.Get("/scrape/postcode/{postcode}",
+		searchByPostcode(o.jobs, o.registry, o.lock),
+	)
+
+	mux.Route("/individuals", func(r chi.Router) {
+		r.Get("/{regNum}", getIndividualByRegNum(o.repo))
+		r.Get("/search/{term}", searchIndividuals(o.repo))
+	})
+
+	return mux
+}
+
 func (o *Server) Start(ctx context.Context) error {
 	scraped, errc := o.mngr.Run(ctx)
 	go func() {
@@ -72,118 +98,6 @@ func (o *Server) Start(ctx context.Context) error {
 		}
 	}()
 	return o.s.ListenAndServe()
-}
-
-func searchByRegistrationNumber(q chan entities.Job, registry map[string]chan entities.Output,
-	lock *sync.Mutex) http.HandlerFunc {
-	p := parser.NewSingleResultParser()
-	return func(w http.ResponseWriter, r *http.Request) {
-		keys, ok := r.URL.Query()["regNum"]
-		if !ok || len(keys[0]) < 1 {
-			msg := map[string]string{
-				"error": "Url Param 'regNum' is missing'",
-			}
-			renderJson(w, http.StatusBadRequest, msg)
-			return
-		}
-		job := entities.NewSearchRegistrationNumberJob(p, keys[0])
-		ch := make(chan entities.Output, 1)
-		defer func() {
-			close(ch)
-			lock.Lock()
-			delete(registry, job.GetID())
-			lock.Unlock()
-		}()
-
-		lock.Lock()
-		registry[job.GetID()] = ch
-		lock.Unlock()
-		q <- job
-		result := <-ch
-		renderJson(w, http.StatusOK, result)
-	}
-}
-
-type PostCodeResponse struct {
-	Postcode    string
-	Count       int
-	Individuals []entities.Individual
-	Errors      []string
-}
-
-func searchByPostcode(q chan entities.Job, registry map[string]chan entities.Output,
-	lock *sync.Mutex) http.HandlerFunc {
-	p := parser.NewListinResultParser()
-	single := parser.NewSingleResultParser()
-	return func(w http.ResponseWriter, r *http.Request) {
-		keys, ok := r.URL.Query()["postcode"]
-		if !ok || len(keys[0]) < 1 {
-			msg := map[string]string{
-				"error": "Url Param 'postcode' is missing'",
-			}
-			renderJson(w, http.StatusBadRequest, msg)
-			return
-		}
-		job := entities.NewDiscoverJob(p, keys[0], "POST", "")
-		ch := make(chan entities.Output, 1)
-		defer func() {
-			close(ch)
-			lock.Lock()
-			delete(registry, job.GetID())
-			lock.Unlock()
-		}()
-
-		lock.Lock()
-		registry[job.GetID()] = ch
-		lock.Unlock()
-		q <- job
-		items := <-ch
-
-		var regNumbers []string
-		for i := range items.Individuals {
-			regNumbers = append(regNumbers, items.Individuals[i].RegistrationNumber)
-		}
-		result := PostCodeResponse{
-			Postcode: keys[0],
-		}
-
-		if len(regNumbers) > 0 {
-			other := make(chan entities.Output, len(regNumbers))
-			wg := &sync.WaitGroup{}
-			for i := range regNumbers {
-				wg.Add(1)
-				go func(num string) {
-					innerJob := entities.NewSearchRegistrationNumberJob(single, num)
-					innerCh := make(chan entities.Output, 1)
-					defer func() {
-						close(innerCh)
-						lock.Lock()
-						delete(registry, innerJob.GetID())
-						lock.Unlock()
-						wg.Done()
-					}()
-					lock.Lock()
-					registry[innerJob.GetID()] = innerCh
-					lock.Unlock()
-					q <- innerJob
-					innerResult := <-innerCh
-					other <- innerResult
-				}(regNumbers[i])
-			}
-			wg.Wait()
-			close(other)
-			for el := range other {
-				if el.Error != nil {
-					result.Errors = append(result.Errors, el.Error.Error())
-				} else {
-					result.Individuals = append(result.Individuals, el.Individuals...)
-				}
-			}
-			result.Count = len(result.Individuals)
-		}
-
-		renderJson(w, http.StatusOK, result)
-	}
 }
 
 func renderJson(w http.ResponseWriter, status int, body interface{}) {
