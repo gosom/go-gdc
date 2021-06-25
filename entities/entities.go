@@ -187,3 +187,13 @@ func (o SearchRegistrationNumberJob) GetMethod() string {
 func (o SearchRegistrationNumberJob) GetFormData() url.Values {
 	return nil
 }
+
+type Condition struct {
+	Field    string
+	Value    string
+	Operator string
+}
+
+func (o *Condition) Sql() string {
+	return fmt.Sprintf("%s %s %%d", o.Field, o.Operator)
+}

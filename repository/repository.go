@@ -3,13 +3,16 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 
 	"github.com/gosom/go-gdc/entities"
 	"github.com/jackc/pgx/v4/pgxpool"
 )
 
 const (
-	iq      = `INSERT INTO individuals(registration_number, data) VALUES($1, $2)`
+	iq = `INSERT INTO individuals(registration_number, data) VALUES($1, $2)
+				ON CONFLICT(registration_number) DO UPDATE SET data = EXCLUDED.data`
 	searchQ = `SELECT data FROM individuals
 				WHERE to_tsvector('english', data) @@ plainto_tsquery($1)`
 )
@@ -53,11 +56,27 @@ func (o *IndividualRepo) GetByRegNum(ctx context.Context, regNum string) (entiti
 	return item, json.Unmarshal(data, &item)
 }
 
-func (o *IndividualRepo) Select(ctx context.Context, conditions map[string]interface{}) ([]entities.Individual, error) {
-	return nil, nil
+func (o *IndividualRepo) Select(ctx context.Context, conditions []entities.Condition) ([]entities.Individual, error) {
+	q := "SELECT data FROM individuals"
+	var params []interface{}
+	if len(conditions) > 0 {
+		var wheres []string
+		for i := range conditions {
+			wheres = append(wheres, fmt.Sprintf(conditions[i].Sql(), i+1))
+			params = append(params, conditions[i].Value)
+		}
+		q += fmt.Sprintf(" WHERE %s", strings.Join(wheres, " AND "))
+	}
+	q += " ORDER BY registration_number"
+	return o.selectIndividuals(ctx, q, params...)
 }
+
 func (o *IndividualRepo) Search(ctx context.Context, term string) ([]entities.Individual, error) {
-	rows, err := o.db.Query(ctx, searchQ, term)
+	return o.selectIndividuals(ctx, searchQ, term)
+}
+
+func (o *IndividualRepo) selectIndividuals(ctx context.Context, q string, params ...interface{}) ([]entities.Individual, error) {
+	rows, err := o.db.Query(ctx, q, params...)
 	if err != nil {
 		return nil, err
 	}

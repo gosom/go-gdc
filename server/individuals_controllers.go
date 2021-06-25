@@ -30,6 +30,27 @@ func getIndividualByRegNum(repo IndividualRepo) http.HandlerFunc {
 	}
 }
 
+func selectIndividuals(repo IndividualRepo) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		items, err := repo.Select(r.Context(), nil)
+		if err != nil {
+			renderJson(w, http.StatusInternalServerError, map[string]string{
+				"error": err.Error(),
+			},
+			)
+			return
+		}
+		ans := make([]SingleIndividual, 0, len(items))
+		for i := range items {
+			el := SingleIndividual{
+				Individual: items[i],
+			}
+			ans = append(ans, el)
+		}
+		renderJson(w, http.StatusOK, ans)
+	}
+}
+
 func searchIndividuals(repo IndividualRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		term := chi.URLParam(r, "term")

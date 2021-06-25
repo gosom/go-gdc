@@ -17,7 +17,7 @@ import (
 
 type IndividualRepo interface {
 	GetByRegNum(ctx context.Context, regNum string) (entities.Individual, error)
-	Select(ctx context.Context, conditions map[string]interface{}) ([]entities.Individual, error)
+	Select(ctx context.Context, conditions []entities.Condition) ([]entities.Individual, error)
 	Search(ctx context.Context, term string) ([]entities.Individual, error)
 }
 
@@ -74,6 +74,7 @@ func (o *Server) getRouter() http.Handler {
 	)
 
 	mux.Route("/individuals", func(r chi.Router) {
+		r.Get("/", selectIndividuals(o.repo))
 		r.Get("/{regNum}", getIndividualByRegNum(o.repo))
 		r.Get("/search/{term}", searchIndividuals(o.repo))
 	})
