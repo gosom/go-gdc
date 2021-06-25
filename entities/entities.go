@@ -58,11 +58,13 @@ func (o Output) String() string {
 }
 
 type Individual struct {
-	Name               string
+	FirstName          string
+	LastName           string
 	RegistrationNumber string
 	Status             string
 	RegistrantType     string
 	ProfessionalTitles string
+	Specialty          string
 	FirstRegisteredOn  string
 	CurrentPeriodFrom  string
 	CurrentPeriodUntil string
@@ -71,7 +73,7 @@ type Individual struct {
 
 func (o Individual) String() string {
 	return fmt.Sprintf(`<name="%s" registrationNumber="%s" Status="%s" RegistrantType="%s FirstRegisteredOn=%s CurrentPeriodFrom="%s" CurrentPeriodUntil="%s" Qualifications="%s">`,
-		o.Name, o.RegistrationNumber, o.Status, o.RegistrantType, o.FirstRegisteredOn, o.CurrentPeriodFrom, o.CurrentPeriodUntil, strings.Join(o.Qualifications, ","))
+		o.LastName, o.RegistrationNumber, o.Status, o.RegistrantType, o.FirstRegisteredOn, o.CurrentPeriodFrom, o.CurrentPeriodUntil, strings.Join(o.Qualifications, ","))
 }
 
 type BaseJob struct {

@@ -27,7 +27,12 @@ func (o *SingleResultParser) Parse(ctx context.Context, body []byte) ([]entities
 	}
 
 	details := dom.Find("#registrant-details>div.card")
-	item.Name = strings.TrimSpace(details.Find("div.card-header>h2").Text())
+	nameEl := details.Find("div.card-header>h2")
+	item.LastName = strings.TrimSpace(nameEl.Find("b").Text())
+	fullName := strings.TrimSpace(details.Find("div.card-header>h2").Text())
+	firstNameEnd := strings.Index(fullName, item.LastName)
+	item.FirstName = strings.TrimSpace(fullName[:firstNameEnd])
+
 	cardBody := details.Find("div.card-body")
 	cardBody.Find("div.row").Each(func(i int, s *goquery.Selection) {
 		if i > 0 && i < 11 {
@@ -36,6 +41,8 @@ func (o *SingleResultParser) Parse(ctx context.Context, body []byte) ([]entities
 				key := strings.TrimSpace(cols.Eq(0).Text())
 				value := strings.TrimSpace(cols.Eq(1).Text())
 				switch key {
+				case "Specialty:":
+					item.Specialty = value
 				case "Dental Care Professional Titles:":
 					item.ProfessionalTitles = value
 				case "Registration Number:":
