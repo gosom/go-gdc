@@ -1,6 +1,7 @@
 package finisher
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -26,5 +27,32 @@ func (o *SimpleJson) Run(in <-chan entities.Output) {
 			panic(err)
 		}
 		fmt.Println(string(b))
+	}
+}
+
+type IndividualRepo interface {
+	BulkInsert(ctx context.Context, items []entities.Individual) error
+}
+
+type DbSaver struct {
+	repo IndividualRepo
+}
+
+func NewDbSaver(repo IndividualRepo) *DbSaver {
+	ans := DbSaver{
+		repo: repo,
+	}
+	return &ans
+}
+
+func (o *DbSaver) Run(in <-chan entities.Output) {
+	ctx := context.Background()
+	for el := range in {
+		fmt.Println(el)
+		if len(el.Individuals) > 0 {
+			if err := o.repo.BulkInsert(ctx, el.Individuals); err != nil {
+				panic(err)
+			}
+		}
 	}
 }
