@@ -3,6 +3,7 @@ package parser
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -31,6 +32,9 @@ func (o *SingleResultParser) Parse(ctx context.Context, body []byte) ([]entities
 	item.LastName = strings.TrimSpace(nameEl.Find("b").Text())
 	fullName := strings.TrimSpace(details.Find("div.card-header>h2").Text())
 	firstNameEnd := strings.Index(fullName, item.LastName)
+	if firstNameEnd < 0 {
+		return ans, "", fmt.Errorf("cannot find firstName in full_name")
+	}
 	item.FirstName = strings.TrimSpace(fullName[:firstNameEnd])
 
 	cardBody := details.Find("div.card-body")
